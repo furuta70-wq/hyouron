@@ -1985,6 +1985,38 @@ body:not(.article-mode) .topbar::after{opacity:0}
   }
 }
 
+
+/* ===== v7.7 responsive index model + touch spectrum ===== */
+@media(max-width:1180px){
+  /* On tablet/mobile the home screen itself is the index. No secondary menu layer. */
+  .sidebar{display:none!important}
+  .menu-btn{display:none!important}
+  .topbar-inner{grid-template-columns:minmax(0,1fr) auto!important}
+  .brand{grid-column:1!important}
+  .top-actions{grid-column:2!important}
+}
+@media(max-width:760px){
+  .topbar-inner{grid-template-columns:minmax(0,1fr) auto!important}
+  .brand{grid-column:1!important}
+  .top-actions{grid-column:2!important}
+  .home-hero .spectrum{display:flex!important}
+}
+@media(hover:none), (pointer:coarse){
+  .home-hero .spectrum{
+    touch-action:pan-y;
+    cursor:default;
+  }
+  .home-hero .spectrum::before{
+    left:-14px;
+    right:-14px;
+    top:-30px;
+    bottom:-30px;
+  }
+  .home-hero .spectrum.spectrum-awake i{
+    filter:saturate(var(--sat,1.13)) drop-shadow(0 2px 3px color-mix(in srgb,var(--c) 18%,transparent));
+  }
+}
+
 </style>
 </head>
 <body>
@@ -2045,6 +2077,7 @@ function navigate(hash,dir='depth'){
  location.hash=hash
 }
 function goHome(){pendingScrollMode='top';navigate('#home','depth')}
+function goIndex(){if(innerWidth<=1180){closeIndex();goHome()}else openIndex()}
 function goArea(a){pendingScrollMode='top';navigate('#area='+a,'depth')}
 function goArticle(id,mode='direct'){
  const cur=currentArticle();
@@ -2081,7 +2114,8 @@ function setupSpectrumMotion(){
 
  const state=bars.map(()=>({y:0,vy:0,r:0,vr:0,s:1,vs:0,x:1,vx:0,o:.88,vo:0}));
  let rect=null,raf=0,inside=false,settleFrames=0,lastX=0,lastT=performance.now(),velocity=0;
- let pointerX=0,pattern=-1,entryCount=0,burst=0,burstX=0;
+ let pointerX=0,pattern=-1,entryCount=0,burst=0,burstX=0,lastTouchX=-1;
+ let touchActive=false;
  const modes=['ripple','peek','sway'];
 
  const choosePattern=()=>{
@@ -2184,27 +2218,83 @@ function setupSpectrumMotion(){
    }else settleFrames=0;
    raf=requestAnimationFrame(tick);
  }
- function localX(e){
+ function localXFromClient(clientX){
    if(!rect)measure();
-   return Math.max(0,Math.min(1,(e.clientX-rect.left)/Math.max(1,rect.width)));
+   return Math.max(0,Math.min(1,(clientX-rect.left)/Math.max(1,rect.width)));
  }
+ function beginTouch(clientX){
+   measure();
+   choosePattern();
+   inside=true;
+   touchActive=true;
+   pointerX=localXFromClient(clientX);
+   lastTouchX=pointerX;
+   lastX=clientX;
+   lastT=performance.now();
+   velocity=0;
+   impulse(pointerX,1.28);
+   wake();
+ }
+ function moveTouch(clientX){
+   if(!touchActive)return;
+   const now=performance.now(),dt=Math.max(8,now-lastT);
+   velocity=(clientX-lastX)/dt*1000;
+   lastX=clientX;lastT=now;
+   pointerX=localXFromClient(clientX);
+   if(lastTouchX<0||Math.abs(pointerX-lastTouchX)>.028){
+     impulse(pointerX,.18);
+     lastTouchX=pointerX;
+   }
+   wake();
+ }
+ function finishTouch(clientX){
+   if(!touchActive)return;
+   if(Number.isFinite(clientX))pointerX=localXFromClient(clientX);
+   inside=false;
+   touchActive=false;
+   velocity=0;
+   lastTouchX=-1;
+   impulse(pointerX,.48);
+   wake();
+ }
+
+ /* Mouse / trackpad / Apple Pencil. Finger input is handled below with
+    Touch Events as well, because iPad Safari can suppress pointermove
+    once it decides the gesture belongs to page scrolling. */
  el.addEventListener('pointerenter',e=>{
    if(e.pointerType==='touch')return;
-   measure();inside=true;choosePattern();pointerX=localX(e);lastX=e.clientX;lastT=performance.now();
+   measure();inside=true;choosePattern();pointerX=localXFromClient(e.clientX);lastX=e.clientX;lastT=performance.now();
    impulse(pointerX,.32);wake();
  });
  el.addEventListener('pointermove',e=>{
    if(e.pointerType==='touch')return;
    const now=performance.now(),dt=Math.max(8,now-lastT);
    velocity=(e.clientX-lastX)/dt*1000;lastX=e.clientX;lastT=now;
-   pointerX=localX(e);wake();
+   pointerX=localXFromClient(e.clientX);wake();
  });
- el.addEventListener('pointerleave',()=>{inside=false;velocity=0;wake()});
+ el.addEventListener('pointerleave',e=>{if(e.pointerType!=='touch'){inside=false;velocity=0;wake()}});
  el.addEventListener('pointerdown',e=>{
-   measure();pointerX=localX(e);
-   if(e.pointerType==='touch'){choosePattern();inside=false}
-   impulse(pointerX,e.pointerType==='touch'?.95:.62);
+   if(e.pointerType==='touch')return;
+   measure();pointerX=localXFromClient(e.clientX);lastX=e.clientX;lastT=performance.now();
+   impulse(pointerX,.68);
  });
+
+ /* iPhone / iPad: direct touch path. Passive listeners preserve vertical scroll. */
+ el.addEventListener('touchstart',e=>{
+   const t=e.touches&&e.touches[0];
+   if(t)beginTouch(t.clientX);
+ },{passive:true});
+ el.addEventListener('touchmove',e=>{
+   const t=e.touches&&e.touches[0];
+   if(t)moveTouch(t.clientX);
+ },{passive:true});
+ el.addEventListener('touchend',e=>{
+   const t=e.changedTouches&&e.changedTouches[0];
+   finishTouch(t?t.clientX:NaN);
+ },{passive:true});
+ el.addEventListener('touchcancel',()=>finishTouch(NaN),{passive:true});
+
+ window.addEventListener('resize',()=>{rect=null},{passive:true});
 }
 
 function renderSidebar(){
@@ -2270,8 +2360,8 @@ function renderHome(){
  updateMobile(null)
 }
 function renderArea(area){document.body.classList.remove('article-mode');setTheme(area);brandCurrent.textContent=areas.find(x=>x.area===area)?.name||'';const name=areas.find(x=>x.area===area)?.name||'';root.innerHTML=`<section class="view area-view"><div class="breadcrumb"><button class="crumb" data-home>評論　基礎知識</button><span>›</span><span>${area}　${esc(name)}</span></div><div class="area-hero"><div class="area-heading-row"><span class="area-badge">${area}</span><div><div class="area-code">SECTION ${area} · ${String(areaTopics(area)[0].id).padStart(2,'0')}—${String(areaTopics(area)[4].id).padStart(2,'0')}</div><h1>${esc(name)}</h1></div></div></div><div class="area-list">${areaTopics(area).map(t=>`<button class="area-topic" data-topic="${t.id}" style="--area:${PALETTE[area]}"><span class="area-topic-num">${String(t.id).padStart(2,'0')}</span><span class="area-topic-title">${esc(t.title)}</span><span class="area-topic-arrow">→</span></button>`).join('')}</div></section>`;root.querySelector('[data-home]').onclick=goHome;root.querySelectorAll('[data-topic]').forEach(b=>b.onclick=()=>goArticle(+b.dataset.topic,'direct'));updateMobile(null)}
-function renderArticle(id){const a=articleMap.get(id);if(!a)return goHome();document.body.classList.add('article-mode');setTheme(a.area);brandCurrent.textContent=`${String(id).padStart(2,'0')}　${a.title}`;const colors=kwColors(PALETTE[a.area],a.keywords.length),seenKeys=new Set(),body=a.body.split(/\n{2,}/).map((p,i)=>`<p class="reveal" data-read-p="${i}">${renderTextWithKeys(p,a.keywords,colors,seenKeys)}</p>`).join('');const prev=id>1?articleMap.get(id-1):null,next=id<120?articleMap.get(id+1):null,inArea=areaTopics(a.area).findIndex(x=>x.id===id)+1;root.innerHTML=`<article class="view article-view"><div class="article-breadcrumb"><button class="crumb" data-home>評論　基礎知識</button><span>›</span><button class="crumb" data-area>${a.area}　${esc(a.areaName)}</button><span>›</span><span>${inArea} / 5</span></div><header class="article-hero"><div class="article-heading-row"><span class="article-area-badge">${a.area}</span><div class="article-heading-copy"><div class="article-meta">${String(id).padStart(2,'0')} / 120</div><h1 class="article-title">${esc(a.title)}</h1></div></div><div class="article-accent" aria-hidden="true">${colors.slice(0,Math.min(5,colors.length)).map(c=>`<i style="--c:${c}"></i>`).join('')}</div></header><section class="question"><div class="question-head"><span class="question-label">問い</span><span class="question-rule"></span></div><div class="question-text">${esc(a.question)}</div></section><section class="prose-wrap"><div class="body-label-row"><span class="body-label">本文</span><span class="body-hint">青字＝用語</span></div><div class="body-text">${body}</div></section><section class="keywords"><div class="keywords-head"><div><div class="keywords-title">キーワード</div><div class="keywords-sub">本文を読み終えたあとに、概念を整理する。</div></div></div><div class="keyword-grid">${a.keywords.map((k,i)=>`<button class="keyword-item" data-keyword="${esc(k[0])}" style="--kw:${colors[i]}"><span class="kw-index">${String(i+1).padStart(2,'0')}</span><span class="kw-term">${esc(k[0])}</span><span class="kw-desc">${esc(k[1])}</span><span class="kw-jump">本文で見る ↑</span></button>`).join('')}</div></section><footer class="article-footer"><button class="foot-nav prev" id="footPrev" ${prev?'':'disabled'}><span class="foot-label">← PREVIOUS</span><span class="foot-title">${prev?esc(prev.title):'最初のテーマ'}</span></button><button class="foot-nav index" id="footIndex"><span class="foot-index-mark">≡</span><span class="foot-label">INDEX</span><span class="foot-title">目次へ</span></button><button class="foot-nav next" id="footNext" ${next?'':'disabled'}><span class="foot-label">NEXT →</span><span class="foot-title">${next?esc(next.title):'最後のテーマ'}</span></button></footer></article>`;
- root.querySelector('[data-home]').onclick=goHome;root.querySelector('[data-area]').onclick=openIndex;document.getElementById('footPrev').onclick=()=>prev&&goArticle(prev.id,'step');document.getElementById('footNext').onclick=()=>next&&goArticle(next.id,'step');document.getElementById('footIndex').onclick=openIndex;root.querySelectorAll('.keyword-item').forEach(btn=>btn.onclick=()=>jumpKeyword(btn.dataset.keyword,btn));bindInlineKeywords();setupReveal();updateMobile(id,a.area);setupFooterObserver()}
+function renderArticle(id){const a=articleMap.get(id);if(!a)return goHome();document.body.classList.add('article-mode');setTheme(a.area);brandCurrent.textContent=`${String(id).padStart(2,'0')}　${a.title}`;const colors=kwColors(PALETTE[a.area],a.keywords.length),seenKeys=new Set(),body=a.body.split(/\n{2,}/).map((p,i)=>`<p class="reveal" data-read-p="${i}">${renderTextWithKeys(p,a.keywords,colors,seenKeys)}</p>`).join('');const prev=id>1?articleMap.get(id-1):null,next=id<120?articleMap.get(id+1):null,inArea=areaTopics(a.area).findIndex(x=>x.id===id)+1;root.innerHTML=`<article class="view article-view"><div class="article-breadcrumb"><button class="crumb" data-home>評論　基礎知識</button><span>›</span><button class="crumb" data-area>${a.area}　${esc(a.areaName)}</button><span>›</span><span>${inArea} / 5</span></div><header class="article-hero"><div class="article-heading-row"><span class="article-area-badge">${a.area}</span><div class="article-heading-copy"><div class="article-meta">${String(id).padStart(2,'0')} / 120</div><h1 class="article-title">${esc(a.title)}</h1></div></div><div class="article-accent" aria-hidden="true">${colors.slice(0,Math.min(5,colors.length)).map(c=>`<i style="--c:${c}"></i>`).join('')}</div></header><section class="question"><div class="question-head"><span class="question-label">問い</span><span class="question-rule"></span></div><div class="question-text">${esc(a.question)}</div></section><section class="prose-wrap"><div class="body-label-row"><span class="body-label">本文</span><span class="body-hint">青字＝用語</span></div><div class="body-text">${body}</div></section><section class="keywords"><div class="keywords-head"><div><div class="keywords-title">キーワード</div></div></div><div class="keyword-grid">${a.keywords.map((k,i)=>`<button class="keyword-item" data-keyword="${esc(k[0])}" style="--kw:${colors[i]}"><span class="kw-index">${String(i+1).padStart(2,'0')}</span><span class="kw-term">${esc(k[0])}</span><span class="kw-desc">${esc(k[1])}</span><span class="kw-jump">本文で見る ↑</span></button>`).join('')}</div></section><footer class="article-footer"><button class="foot-nav prev" id="footPrev" ${prev?'':'disabled'}><span class="foot-label">← PREVIOUS</span><span class="foot-title">${prev?esc(prev.title):'最初のテーマ'}</span></button><button class="foot-nav index" id="footIndex"><span class="foot-index-mark">≡</span><span class="foot-label">INDEX</span><span class="foot-title">目次へ</span></button><button class="foot-nav next" id="footNext" ${next?'':'disabled'}><span class="foot-label">NEXT →</span><span class="foot-title">${next?esc(next.title):'最後のテーマ'}</span></button></footer></article>`;
+ root.querySelector('[data-home]').onclick=goHome;root.querySelector('[data-area]').onclick=goIndex;document.getElementById('footPrev').onclick=()=>prev&&goArticle(prev.id,'step');document.getElementById('footNext').onclick=()=>next&&goArticle(next.id,'step');document.getElementById('footIndex').onclick=goIndex;root.querySelectorAll('.keyword-item').forEach(btn=>btn.onclick=()=>jumpKeyword(btn.dataset.keyword,btn));bindInlineKeywords();setupReveal();updateMobile(id,a.area);setupFooterObserver()}
 function jumpKeyword(term,btn){root.querySelectorAll('.keyword-item').forEach(x=>x.classList.toggle('active',x===btn));const target=[...root.querySelectorAll('.key-ref')].find(x=>x.dataset.key===term);if(target){target.scrollIntoView({behavior:'smooth',block:'center'});target.classList.add('flash');setTimeout(()=>target.classList.remove('flash'),1400)}}
 function jumpKeywordCard(term){const target=[...root.querySelectorAll('.keyword-item')].find(x=>x.dataset.keyword===term);if(target){target.scrollIntoView({behavior:'smooth',block:'center'});target.classList.add('active');setTimeout(()=>target.classList.remove('active'),1400)}}
 let keywordTip=null,keywordTipPinned=false,keywordTipSource=null;
@@ -2317,7 +2407,7 @@ window.addEventListener('resize',()=>{if(keywordTip&&keywordTip.classList.contai
 let footerObserver=null;
 function setupFooterObserver(){if(footerObserver)footerObserver.disconnect();const bar=document.getElementById('mobileNav'),foot=root.querySelector('.article-footer');if(!foot||!bar)return;footerObserver=new IntersectionObserver(es=>es.forEach(e=>bar.classList.toggle('at-footer',e.isIntersecting)),{threshold:.12});footerObserver.observe(foot)}
 function setupReveal(){if(articleObserver)articleObserver.disconnect();if(matchMedia('(prefers-reduced-motion: reduce)').matches){root.querySelectorAll('.reveal').forEach(x=>x.classList.add('seen'));return}document.body.classList.add('motion-ready');articleObserver=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('seen');articleObserver.unobserve(e.target)}}),{threshold:.08,rootMargin:'0px 0px -7%'});root.querySelectorAll('.reveal').forEach(x=>articleObserver.observe(x))}
-function updateMobile(id,area){const bar=document.getElementById('mobileNav'),p=document.getElementById('mobilePrev'),n=document.getElementById('mobileNext'),m=document.getElementById('mobileIndex');if(!id){bar.classList.add('hidden');return}bar.classList.remove('hidden');p.disabled=id<=1;n.disabled=id>=120;p.onclick=()=>id>1&&goArticle(id-1,'step');n.onclick=()=>id<120&&goArticle(id+1,'step');m.onclick=openIndex}
+function updateMobile(id,area){const bar=document.getElementById('mobileNav'),p=document.getElementById('mobilePrev'),n=document.getElementById('mobileNext'),m=document.getElementById('mobileIndex');if(!id){bar.classList.add('hidden');return}bar.classList.remove('hidden');p.disabled=id<=1;n.disabled=id>=120;p.onclick=()=>id>1&&goArticle(id-1,'step');n.onclick=()=>id<120&&goArticle(id+1,'step');m.onclick=goIndex}
 
 function applyView(){
  const aid=currentArticle(),ar=currentArea();
@@ -2347,7 +2437,7 @@ function openIndex(){
 const fontSizes={small:['16px','1.94'],standard:['18px','2'],large:['20px','2.01'],xlarge:['22px','2.03']};function setFont(k){if(!fontSizes[k])k='standard';document.documentElement.style.setProperty('--reader',fontSizes[k][0]);document.documentElement.style.setProperty('--leading',fontSizes[k][1]);document.querySelectorAll('.font-choice').forEach(b=>b.classList.toggle('active',b.dataset.size===k));safeSet('hyouron120:font',k)}
 function updateProgress(){const aid=currentArticle();if(!aid){document.body.style.setProperty('--page-progress','0');document.body.style.setProperty('--read-progress','0');return}const doc=document.documentElement,max=doc.scrollHeight-innerHeight,p=max>0?Math.min(1,scrollY/max):0;document.body.style.setProperty('--page-progress',p);document.body.style.setProperty('--read-progress',p);if(innerWidth<=760){const compact=scrollY>115;topbar.classList.toggle('compact',compact);document.getElementById('mobileNav').classList.toggle('compact',scrollY>220&&scrollY>lastScroll)}else topbar.classList.remove('compact');lastScroll=scrollY}
 
-document.getElementById('brandBtn').onclick=goHome;document.getElementById('sideHome').onclick=goHome;document.getElementById('menuBtn').onclick=openIndex;document.getElementById('quickIndex').onclick=openIndex;document.getElementById('indexClose').onclick=closeIndex;indexOverlay.addEventListener('click',e=>{if(e.target===indexOverlay)closeIndex()});document.getElementById('fontBtn').onclick=e=>{e.stopPropagation();fontMenu.classList.toggle('open')};document.querySelectorAll('.font-choice').forEach(b=>b.onclick=()=>{setFont(b.dataset.size);fontMenu.classList.remove('open')});document.addEventListener('click',e=>{if(!fontMenu.contains(e.target)&&e.target.id!=='fontBtn')fontMenu.classList.remove('open')});document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeIndex();fontMenu.classList.remove('open')}});window.addEventListener('hashchange',renderRoute);window.addEventListener('scroll',()=>{
+document.getElementById('brandBtn').onclick=goHome;document.getElementById('sideHome').onclick=goHome;document.getElementById('menuBtn').onclick=goIndex;document.getElementById('quickIndex').onclick=goIndex;document.getElementById('indexClose').onclick=closeIndex;indexOverlay.addEventListener('click',e=>{if(e.target===indexOverlay)closeIndex()});document.getElementById('fontBtn').onclick=e=>{e.stopPropagation();fontMenu.classList.toggle('open')};document.querySelectorAll('.font-choice').forEach(b=>b.onclick=()=>{setFont(b.dataset.size);fontMenu.classList.remove('open')});document.addEventListener('click',e=>{if(!fontMenu.contains(e.target)&&e.target.id!=='fontBtn')fontMenu.classList.remove('open')});document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeIndex();fontMenu.classList.remove('open')}});window.addEventListener('hashchange',renderRoute);window.addEventListener('scroll',()=>{
  updateProgress();
  if(currentArticle()&&!positionSaveRAF){
    positionSaveRAF=requestAnimationFrame(()=>{positionSaveRAF=0;saveReadingPosition()})
